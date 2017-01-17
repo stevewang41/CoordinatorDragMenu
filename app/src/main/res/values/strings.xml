@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">CoordinatorDragMenu</string>
+
+    <string name="menu_milk_text">再忙也要多喝水</string>
+    <string name="menu_basketball_text">运动有益健康</string>
+    <string name="menu_book_text">沉迷学习无法自拔</string>
+    <string name="menu_game_text">垃圾游戏毁我青春</string>
+    <string name="menu_mouse_text">竜が私が敌を喰らう</string>
+    <string name="menu_rocket_text">飞上天和太阳肩并肩</string>
+</resources>
