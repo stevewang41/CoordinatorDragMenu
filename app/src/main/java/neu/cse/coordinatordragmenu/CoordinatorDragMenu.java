@@ -8,6 +8,7 @@ import android.support.v4.view.ViewCompat;
 import android.support.v4.widget.ViewDragHelper;
 import android.util.AttributeSet;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -31,9 +32,9 @@ public class CoordinatorDragMenu extends FrameLayout {
     private static final String DEFAULT_SHADOW_OPACITY = "00";
     private String mShadowOpacity = DEFAULT_SHADOW_OPACITY; // 阴影透明度，随MainView位置的变化而变化
 
-    private int mMenuState = MENU_CLOSED;
     private static final int MENU_CLOSED = 1;
     private static final int MENU_OPENED = 2;
+    private int mMenuState = MENU_CLOSED;
 
     private int mDragOrientation;
     private static final int LEFT_TO_RIGHT = 3;
@@ -68,7 +69,8 @@ public class CoordinatorDragMenu extends FrameLayout {
 
 
     /**
-     * 加载完布局文件后调用，这里可以获取其子View的引用，但还无法获得子View的宽高
+     * 只有在从布局文件中加载View时会回调，直接new一个的话是不会回调的
+     * 可以在这里拿到其子View，但还无法获取子View的宽高
      */
     protected void onFinishInflate() {
         super.onFinishInflate();
@@ -76,12 +78,8 @@ public class CoordinatorDragMenu extends FrameLayout {
         mMenuView = getChildAt(0);  // 第一个子View
         mMainView = getChildAt(1);  // 第二个子View
 
-        // 如果在布局文件中指定MenuView的宽度为match_parent，则无法通过LayoutParams获取宽度
-        // 只能在onSizeChanged()中通过getMeasuredWidth获取
-        mMenuWidth = mMenuView.getLayoutParams().width;
-
-        // 如果子View不消耗触摸事件，那么触摸事件（DOWN-MOVE-UP）都是直接进入onTouchEvent，在onTouchEvent的DOWN的时候就确定了captureView
-        // 这里为MainView设置了OnClickListener，会消耗触摸事件，导致先走onInterceptTouchEvent方法，判断是否可以捕获
+        // 如果子View不消耗触摸事件，那么触摸事件（DOWN-MOVE-UP）都是直接进入onTouchEvent()，在onTouchEvent()的DOWN的时候就确定了captureView
+        // 这里为MainView设置了OnClickListener，会消耗触摸事件，导致先走onInterceptTouchEvent()，判断是否可以捕获
         // 而在判断的过程中会去判断另外两个回调的方法：getViewHorizontalDragRange和getViewVerticalDragRange，只有这两个方法返回大于0的值才能正常的捕获
         mMainView.setOnClickListener(new OnClickListener() {
             @Override
@@ -91,6 +89,25 @@ public class CoordinatorDragMenu extends FrameLayout {
                 }
             }
         });
+    }
+
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        mMenuWidth = mMenuView.getMeasuredWidth();
+    }
+
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        if (mMenuState == MENU_OPENED) {
+            mMenuView.layout(0, 0, mMenuWidth, bottom);
+            mMainView.layout(mMenuWidth, 0, mMenuWidth + mScreenWidth, bottom);
+        } else {
+            mMenuView.layout(-mMenuOffset, top, mMenuWidth - mMenuOffset, bottom);  // 初始时MenuView向左偏移一个mMenuOffset距离
+        }
     }
 
 
@@ -112,24 +129,6 @@ public class CoordinatorDragMenu extends FrameLayout {
 
 
     @Override
-    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
-        super.onLayout(changed, left, top, right, bottom);
-        if (mMenuState == MENU_OPENED) {
-            mMenuView.layout(0, 0, mMenuWidth, bottom);
-            mMainView.layout(mMenuWidth, 0, mMenuWidth + mScreenWidth, bottom);
-        } else {
-            mMenuView.layout(-mMenuOffset, top, mMenuWidth - mMenuOffset, bottom);  // 初始时MenuView向左偏移一个mMenuOffset距离
-        }
-    }
-
-    //    @Override
-    //    protected void onSizeChanged(int w, int h, int oldw, int oldh)
-    //    {
-    //        super.onSizeChanged(w, h, oldw, oldh);
-    //        mMenuWidth = mMenuView.getMeasuredWidth();  // 获得MenuView的测量宽度
-    //    }
-
-    @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
         return mViewDragHelper.shouldInterceptTouchEvent(ev); // ViewDragHelper决定是否拦截触摸事件
     }
@@ -141,6 +140,9 @@ public class CoordinatorDragMenu extends FrameLayout {
     }
 
 
+    /**
+     * 这个Callback是整个ViewDragHelper的逻辑核心
+     */
     private ViewDragHelper.Callback callback = new ViewDragHelper.Callback() {
 
         /**
@@ -156,18 +158,17 @@ public class CoordinatorDragMenu extends FrameLayout {
         }
 
         /**
-         * 用户触摸到View后回调
+         * 用户触摸到可以接受触摸事件的child后回调
          *
          * @param capturedChild
          * @param activePointerId
          */
         @Override
         public void onViewCaptured(View capturedChild, int activePointerId) {
+            // 如果当前触摸的View是MenuView，也交由MainView处理，这样手指在MenuView上滑动时，移动的也是MainView
             if (capturedChild == mMenuView) {
                 mViewDragHelper.captureChildView(mMainView, activePointerId);
             }
-            // MainView捕获MenuView上的触摸事件，该方法可绕过tryCaptureView
-            // 即如果当前触摸的View是MenuView，也交给MainView处理，这样手指在MenuView上滑动时，移动的也是MainView
         }
 
         /**
@@ -218,7 +219,9 @@ public class CoordinatorDragMenu extends FrameLayout {
             } else if (dx < 0) {
                 mDragOrientation = RIGHT_TO_LEFT;
             }
-            // 实现MenuView跟随MainView移动，它们之间的距离有如下线性关系
+            // 实现MenuView跟随MainView移动
+            // MenuView左边缘和MainView左边缘之间的距离由mMenuOffset增加到mMenuWidth
+            // 此时MainView移动了mMenuWidth，可以认为这种增加是线性的
             // left - menuLeft = (mMenuWidth - mMenuOffset) / mMenuWidth * left + mMenuOffset
             float scale = (float) (mMenuWidth - mMenuOffset) / (float) mMenuWidth;
             int menuLeft = left - ((int) (scale * left) + mMenuOffset);
@@ -262,6 +265,7 @@ public class CoordinatorDragMenu extends FrameLayout {
     };
 
     /**
+     * 滑动过程中调用
      * 使用ViewDragHelper同样需要重写computeScroll()
      * 因为ViewDragHelper内部也是通过Scroller来实现平滑移动的
      */
